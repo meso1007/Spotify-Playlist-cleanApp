@@ -13,7 +13,9 @@ const scopes = [
     "streaming",
     "user-read-playback-state",
     "user-modify-playback-state",
-    "user-read-currently-playing"
+    "user-read-currently-playing",
+    "playlist-modify-public",  // 👈 追加
+    "playlist-modify-private",
 ].join(" ");
 
 export const authOptions: NextAuthOptions = {
