@@ -2,12 +2,12 @@
 "use client";
 
 import { useSession, signIn } from "next-auth/react";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, TouchEvent, MouseEvent } from "react";
 import TinderCard from "react-tinder-card";
 import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer";
-import { SavedTrack, SpotifyPager } from "@/types/spotify";
+import { SavedTrack } from "@/types/spotify";
 import Header from "@/components/Header";
-import { X, Heart, ArrowUp, Undo2, PlayCircle, Music2, ArrowRight } from "lucide-react";
+import { X, Heart, ArrowUp, Undo2, PlayCircle, Music2 } from "lucide-react";
 
 type Playlist = { id: string; name: string; };
 
@@ -21,11 +21,15 @@ export default function Home() {
   const [isDeepClean, setIsDeepClean] = useState(false);
   const [deletedHistory, setDeletedHistory] = useState<SavedTrack[]>([]);
 
+  // ドラッグ & エフェクト管理
+  const [dragStart, setDragStart] = useState<{ x: number, y: number } | null>(null);
+  const [activeZone, setActiveZone] = useState<"left" | "right" | "up" | null>(null);
+
   const { deviceId, playTrack } = useSpotifyPlayer(session?.accessToken);
   const cardRefs = useRef<any[]>([]);
   const React = require('react');
 
-  // --- API Logics (変更なし) ---
+  // --- API Logics ---
   useEffect(() => {
     if (session?.accessToken) {
       fetch("https://api.spotify.com/v1/me/playlists?limit=50", { headers: { Authorization: `Bearer ${session.accessToken}` } })
@@ -76,16 +80,85 @@ export default function Home() {
     if (selectedPlaylistId) { await fetch(`https://api.spotify.com/v1/playlists/${selectedPlaylistId}/tracks`, { method: "POST", headers: { Authorization: `Bearer ${session?.accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ uris: [trackToRestore.track.uri] }) }); } else { await fetch(`https://api.spotify.com/v1/me/tracks`, { method: "PUT", headers: { Authorization: `Bearer ${session?.accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ ids: [trackToRestore.track.id] }) }); }
     playTrack(trackToRestore.track.uri);
   };
-  const onCardLeftScreen = (myIdentifier: string) => { setTracks((prev) => prev.filter((t) => t.track.id !== myIdentifier)); };
+
+  const onCardLeftScreen = (myIdentifier: string) => {
+    setTracks((prev) => prev.filter((t) => t.track.id !== myIdentifier));
+    setActiveZone(null);
+  };
+
   const onSwipe = (direction: string, trackUri: string, index: number) => {
+    setActiveZone(null);
     const swipedTrack = tracks[index];
     const nextIndex = index - 1;
     if (nextIndex >= 0 && tracks[nextIndex]) playTrack(tracks[nextIndex].track.uri);
     if (direction === "left") { removeTrack(trackUri); if (swipedTrack) setDeletedHistory((prev) => [...prev, swipedTrack]); } else if (direction === "up") { addToPlaylist(trackUri); }
   };
+
   const handleStart = () => { if (tracks.length > 0) { playTrack(tracks[tracks.length - 1].track.uri); setHasStarted(true); } };
-  const swipe = async (dir: string) => { const topCardIndex = tracks.length - 1; if (topCardIndex >= 0 && cardRefs.current[topCardIndex]) { await cardRefs.current[topCardIndex].swipe(dir); } };
+
+  const swipe = async (dir: string) => {
+    const topCardIndex = tracks.length - 1;
+    if (topCardIndex >= 0 && cardRefs.current[topCardIndex]) {
+      await cardRefs.current[topCardIndex].swipe(dir);
+    }
+  };
+
   const handlePlaylistSelect = (id: string | null) => { setSelectedPlaylistId(id); setHasStarted(false); setDeletedHistory([]); };
+
+  // --- ドラッグ座標計算 ---
+  const handleDragStart = (e: TouchEvent | MouseEvent) => {
+    const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
+    setDragStart({ x: clientX, y: clientY });
+  };
+  const handleDragMove = (e: TouchEvent | MouseEvent) => {
+    if (!dragStart) return;
+    const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
+    const diffX = clientX - dragStart.x;
+    const diffY = clientY - dragStart.y;
+    const threshold = 50;
+    if (Math.abs(diffY) > Math.abs(diffX) && diffY < -threshold) { setActiveZone("up"); }
+    else if (Math.abs(diffX) > Math.abs(diffY)) {
+      if (diffX > threshold) setActiveZone("right");
+      else if (diffX < -threshold) setActiveZone("left");
+      else setActiveZone(null);
+    } else { setActiveZone(null); }
+  };
+  const handleDragEnd = () => { setDragStart(null); setTimeout(() => setActiveZone(null), 300); };
+
+  // ▼ キーボード操作 (New Feature)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // STARTしていない時は無効にするならここ制御、今回は常に有効
+      if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "SELECT") return;
+
+      switch (e.key) {
+        case "ArrowLeft":
+          swipe("left");
+          setActiveZone("left"); // 演出用
+          break;
+        case "ArrowRight":
+          swipe("right");
+          setActiveZone("right");
+          break;
+        case "ArrowUp":
+          swipe("up");
+          setActiveZone("up");
+          break;
+        case "Backspace":
+        case "Delete":
+          undoLastAction();
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [tracks, deletedHistory]); // 依存配列: 最新のtracksとhistoryを参照するため必要
+
 
   if (!session) return (
     <div className="flex min-h-screen items-center justify-center bg-[#121212] text-white">
@@ -94,9 +167,19 @@ export default function Home() {
   );
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[#121212] overflow-hidden select-none relative">
+    <div className="flex flex-col h-screen w-full bg-[#121212] overflow-hidden select-none relative transition-colors duration-500">
 
-      {/* 1. Header (Collapsible on Mobile, Full on PC) */}
+      {/* Background Lighting */}
+      <div className={`absolute inset-0 pointer-events-none transition-opacity duration-300 z-0 ${activeZone === 'left' ? 'opacity-100' : 'opacity-0'}`}>
+        <div className="absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-rose-600/30 to-transparent blur-3xl" />
+      </div>
+      <div className={`absolute inset-0 pointer-events-none transition-opacity duration-300 z-0 ${activeZone === 'right' ? 'opacity-100' : 'opacity-0'}`}>
+        <div className="absolute inset-y-0 right-0 w-1/3 bg-gradient-to-l from-emerald-600/30 to-transparent blur-3xl" />
+      </div>
+      <div className={`absolute inset-0 pointer-events-none transition-opacity duration-300 z-0 ${activeZone === 'up' ? 'opacity-100' : 'opacity-0'}`}>
+        <div className="absolute top-0 inset-x-0 h-1/3 bg-gradient-to-b from-sky-600/30 to-transparent blur-3xl" />
+      </div>
+
       <Header
         userImage={session.user?.image}
         playlists={playlists}
@@ -108,12 +191,8 @@ export default function Home() {
         setDestinationPlaylistId={setDestinationPlaylistId}
       />
 
-      {/* 2. Main Area (Card & Buttons) */}
-      {/* Mobile: Flex Column / PC: Relative Container */}
-      <main className="flex-1 flex flex-col md:block relative w-full h-full pt-16 md:pt-20">
+      <main className="flex-1 flex flex-col md:block relative w-full h-full pt-16 md:pt-20 z-10">
 
-        {/* --- Card Area --- */}
-        {/* Mobile: Takes available space. PC: Centered absolutely. */}
         <div className="flex-1 flex items-center justify-center relative w-full md:absolute md:inset-0 md:z-10">
           <div className="relative w-[90%] max-w-[340px] aspect-[3/4] md:w-[400px] md:h-[540px]">
             {tracks.map((item, index) => (
@@ -127,17 +206,25 @@ export default function Home() {
                 swipeThreshold={40}
                 className="absolute top-0 left-0 w-full h-full"
               >
-                <div className="w-full h-full bg-neutral-900 rounded-3xl shadow-2xl border border-white/10 relative overflow-hidden group">
-                  {/* Art */}
-                  <img
-                    src={item.track.album.images[0]?.url}
-                    className="w-full h-full object-cover pointer-events-none"
-                    alt="Art"
-                  />
+                <div
+                  className={`w-full h-full bg-neutral-900 rounded-3xl shadow-2xl border transition-colors duration-300 relative overflow-hidden group cursor-grab active:cursor-grabbing
+                    ${activeZone === 'left' && index === tracks.length - 1 ? 'border-rose-500/50 shadow-rose-900/50' : ''}
+                    ${activeZone === 'right' && index === tracks.length - 1 ? 'border-emerald-500/50 shadow-emerald-900/50' : ''}
+                    ${activeZone === 'up' && index === tracks.length - 1 ? 'border-sky-500/50 shadow-sky-900/50' : 'border-white/10'}
+                  `}
+                  onTouchStart={handleDragStart}
+                  onTouchMove={handleDragMove}
+                  onTouchEnd={handleDragEnd}
+                  onMouseDown={handleDragStart}
+                  onMouseMove={handleDragMove}
+                  onMouseUp={handleDragEnd}
+                  onMouseLeave={handleDragEnd}
+                >
+                  <img src={item.track.album.images[0]?.url} className="w-full h-full object-cover pointer-events-none" alt="Art" />
                   <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-90" />
 
                   {/* Up Hint */}
-                  <div className="absolute top-4 w-full flex justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                  <div className={`absolute top-4 w-full flex justify-center transition-opacity duration-300 ${activeZone === 'up' && index === tracks.length - 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
                     <span className="bg-sky-600/90 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest shadow-lg">Up to Add</span>
                   </div>
 
@@ -146,6 +233,15 @@ export default function Home() {
                     <h2 className="text-2xl font-black text-white leading-tight drop-shadow-md line-clamp-2">{item.track.name}</h2>
                     <p className="text-lg text-neutral-300 font-medium drop-shadow-md line-clamp-1">{item.track.artists[0].name}</p>
                   </div>
+
+                  {/* Icons Overlay */}
+                  {index === tracks.length - 1 && activeZone && (
+                    <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
+                      {activeZone === 'left' && <X size={80} className="text-rose-500 opacity-80 drop-shadow-lg" />}
+                      {activeZone === 'right' && <Heart size={80} className="text-emerald-500 opacity-80 drop-shadow-lg" fill="currentColor" />}
+                      {activeZone === 'up' && <ArrowUp size={80} className="text-sky-500 opacity-80 drop-shadow-lg" />}
+                    </div>
+                  )}
                 </div>
               </TinderCard>
             ))}
@@ -158,40 +254,35 @@ export default function Home() {
           </div>
         </div>
 
-        {/* --- Controls --- */}
-
-        {/* Mobile: Footer Bar (Cardの下に配置) */}
+        {/* Mobile Footer */}
         <div className="md:hidden w-full px-6 pb-8 pt-4 flex items-center justify-between z-20 bg-gradient-to-t from-[#121212] via-[#121212] to-transparent">
-          <button onClick={() => swipe("left")} className="w-16 h-16 bg-rose-500/10 border border-rose-500/30 text-rose-500 rounded-full flex items-center justify-center shadow-lg active:scale-90 transition">
+          <button onClick={() => swipe("left")} className={`w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition duration-300 ${activeZone === 'left' ? 'bg-rose-500 text-white scale-110' : 'bg-rose-500/10 border border-rose-500/30 text-rose-500'}`}>
             <X size={32} />
           </button>
           <div className="flex gap-4">
             <button onClick={undoLastAction} disabled={deletedHistory.length === 0} className={`w-12 h-12 rounded-full flex items-center justify-center border transition ${deletedHistory.length > 0 ? "bg-amber-500/10 border-amber-500/30 text-amber-500" : "bg-white/5 border-white/5 text-neutral-700"}`}><Undo2 size={20} /></button>
-            <button onClick={() => swipe("up")} className="w-12 h-12 bg-sky-500/10 border border-sky-500/30 text-sky-500 rounded-full flex items-center justify-center shadow-lg active:scale-90 transition"><ArrowUp size={24} /></button>
+            <button onClick={() => swipe("up")} className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition duration-300 ${activeZone === 'up' ? 'bg-sky-500 text-white scale-110' : 'bg-sky-500/10 border border-sky-500/30 text-sky-500'}`}><ArrowUp size={24} /></button>
           </div>
-          <button onClick={() => swipe("right")} className="w-16 h-16 bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 rounded-full flex items-center justify-center shadow-lg active:scale-90 transition">
+          <button onClick={() => swipe("right")} className={`w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition duration-300 ${activeZone === 'right' ? 'bg-emerald-500 text-white scale-110' : 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-500'}`}>
             <Heart size={32} fill="currentColor" />
           </button>
         </div>
 
-        {/* PC: Side Flanks (画面左右に配置) */}
+        {/* PC Side Buttons */}
         <div className="hidden md:block">
-          {/* Left: Delete */}
-          <button onClick={() => swipe("left")} className="absolute left-10 top-1/2 -translate-y-1/2 w-20 h-20 bg-rose-500/10 border border-rose-500/30 text-rose-500 rounded-full flex items-center justify-center hover:scale-110 hover:bg-rose-500 hover:text-white transition-all duration-300 z-20">
+          <button onClick={() => swipe("left")} className={`absolute left-10 top-1/2 -translate-y-1/2 w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 z-20 ${activeZone === 'left' ? 'bg-rose-500 text-white scale-110 shadow-[0_0_30px_rgba(244,63,94,0.5)]' : 'bg-rose-500/10 border border-rose-500/30 text-rose-500 hover:bg-rose-500 hover:text-white'}`}>
             <X size={40} strokeWidth={3} />
           </button>
 
-          {/* Right: Keep */}
-          <button onClick={() => swipe("right")} className="absolute right-10 top-1/2 -translate-y-1/2 w-20 h-20 bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 rounded-full flex items-center justify-center hover:scale-110 hover:bg-emerald-500 hover:text-white transition-all duration-300 z-20">
+          <button onClick={() => swipe("right")} className={`absolute right-10 top-1/2 -translate-y-1/2 w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 z-20 ${activeZone === 'right' ? 'bg-emerald-500 text-white scale-110 shadow-[0_0_30px_rgba(16,185,129,0.5)]' : 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500 hover:text-white'}`}>
             <Heart size={40} fill="currentColor" />
           </button>
 
-          {/* Bottom Center: Undo & Up */}
           <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex gap-6 z-20">
             <button onClick={undoLastAction} disabled={deletedHistory.length === 0} className={`w-14 h-14 rounded-full flex items-center justify-center border transition hover:scale-110 ${deletedHistory.length > 0 ? "bg-amber-500/10 border-amber-500/30 text-amber-500 hover:bg-amber-500 hover:text-white" : "bg-white/5 border-white/5 text-neutral-700"}`}>
               <Undo2 size={24} />
             </button>
-            <button onClick={() => swipe("up")} className="w-14 h-14 bg-sky-500/10 border border-sky-500/30 text-sky-500 rounded-full flex items-center justify-center hover:scale-110 hover:bg-sky-500 hover:text-white transition">
+            <button onClick={() => swipe("up")} className={`w-14 h-14 rounded-full flex items-center justify-center transition duration-300 ${activeZone === 'up' ? 'bg-sky-500 text-white scale-110 shadow-[0_0_30px_rgba(14,165,233,0.5)]' : 'bg-sky-500/10 border border-sky-500/30 text-sky-500 hover:bg-sky-500 hover:text-white'}`}>
               <ArrowUp size={28} />
             </button>
           </div>
@@ -199,7 +290,6 @@ export default function Home() {
 
       </main>
 
-      {/* Start Overlay */}
       {!hasStarted && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#121212]/95 backdrop-blur-xl p-8">
           <div className="text-center space-y-6 max-w-sm">
@@ -213,10 +303,7 @@ export default function Home() {
             {!deviceId ? (
               <p className="text-emerald-500 animate-pulse font-bold">Connecting...</p>
             ) : (
-              <button
-                onClick={handleStart}
-                className="w-full flex items-center justify-center gap-3 bg-emerald-500 text-black px-8 py-4 text-xl font-bold rounded-full hover:scale-105 transition shadow-xl"
-              >
+              <button onClick={handleStart} className="w-full flex items-center justify-center gap-3 bg-emerald-500 text-black px-8 py-4 text-xl font-bold rounded-full hover:scale-105 transition shadow-xl">
                 <PlayCircle size={24} fill="black" /> START
               </button>
             )}
