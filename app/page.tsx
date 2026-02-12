@@ -1,4 +1,3 @@
-// src/app/page.tsx
 "use client";
 
 import { useSession, signIn } from "next-auth/react";
@@ -7,12 +6,14 @@ import TinderCard from "react-tinder-card";
 import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer";
 import { SavedTrack } from "@/types/spotify";
 import Header from "@/components/Header";
-import { X, Heart, ArrowUp, Undo2, PlayCircle, Music2 } from "lucide-react";
+import { X, Heart, ArrowUp, Undo2, PlayCircle, Music2, Loader2 } from "lucide-react";
 
 type Playlist = { id: string; name: string; };
 
 export default function Home() {
-  const { data: session } = useSession();
+  // status を取得して、ロード中か未ログインかを判定する
+  const { data: session, status } = useSession();
+
   const [tracks, setTracks] = useState<SavedTrack[]>([]);
   const [hasStarted, setHasStarted] = useState(false);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
@@ -25,20 +26,30 @@ export default function Home() {
   const [dragStart, setDragStart] = useState<{ x: number, y: number } | null>(null);
   const [activeZone, setActiveZone] = useState<"left" | "right" | "up" | null>(null);
 
+  // ログインしていない時はPlayerを初期化しない
   const { deviceId, playTrack } = useSpotifyPlayer(session?.accessToken);
   const cardRefs = useRef<any[]>([]);
   const React = require('react');
 
   // --- API Logics ---
+  // ログインしている(authenticated)時だけ実行する
   useEffect(() => {
-    if (session?.accessToken) {
+    if (status === "authenticated" && session?.accessToken) {
       fetch("https://api.spotify.com/v1/me/playlists?limit=50", { headers: { Authorization: `Bearer ${session.accessToken}` } })
-        .then((res) => res.json()).then((data) => { if (data.items) { setPlaylists(data.items); if (data.items.length > 0) setDestinationPlaylistId(data.items[0].id); } });
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.items) {
+            setPlaylists(data.items);
+            if (data.items.length > 0) setDestinationPlaylistId(data.items[0].id);
+          }
+        })
+        .catch(err => console.error("Playlist fetch error:", err));
     }
-  }, [session]);
+  }, [status, session]);
 
   useEffect(() => {
-    if (!session?.accessToken) return;
+    if (status !== "authenticated" || !session?.accessToken) return;
+
     const fetchTracks = async () => {
       try {
         let offset = 0;
@@ -51,6 +62,13 @@ export default function Home() {
         }
         const finalRes = await fetch(`${baseUrl}?offset=${offset}&limit=50`, { headers: { Authorization: `Bearer ${session.accessToken}` } });
         const finalData = await finalRes.json();
+
+        // エラーハンドリング（401などが返ってきた場合）
+        if (finalData.error) {
+          console.error("Spotify API Error:", finalData.error);
+          return;
+        }
+
         let items = finalData.items || [];
         items = items.filter((item: any) => item.track && item.track.id);
         if (isDeepClean) items = items.reverse();
@@ -59,8 +77,9 @@ export default function Home() {
       } catch (e) { console.error(e); }
     };
     fetchTracks();
-  }, [session, selectedPlaylistId, isDeepClean]);
+  }, [status, session, selectedPlaylistId, isDeepClean]);
 
+  // ... (addToPlaylist, removeTrack, undoLastAction などは変更なし。ただしsessionチェックは重要) ...
   const addToPlaylist = async (trackUri: string) => {
     if (!session?.accessToken || !destinationPlaylistId) { alert("Please select a destination playlist first!"); return; }
     await fetch(`https://api.spotify.com/v1/playlists/${destinationPlaylistId}/tracks`, { method: "POST", headers: { Authorization: `Bearer ${session.accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ uris: [trackUri] }) });
@@ -81,11 +100,7 @@ export default function Home() {
     playTrack(trackToRestore.track.uri);
   };
 
-  const onCardLeftScreen = (myIdentifier: string) => {
-    setTracks((prev) => prev.filter((t) => t.track.id !== myIdentifier));
-    setActiveZone(null);
-  };
-
+  const onCardLeftScreen = (myIdentifier: string) => { setTracks((prev) => prev.filter((t) => t.track.id !== myIdentifier)); setActiveZone(null); };
   const onSwipe = (direction: string, trackUri: string, index: number) => {
     setActiveZone(null);
     const swipedTrack = tracks[index];
@@ -93,79 +108,71 @@ export default function Home() {
     if (nextIndex >= 0 && tracks[nextIndex]) playTrack(tracks[nextIndex].track.uri);
     if (direction === "left") { removeTrack(trackUri); if (swipedTrack) setDeletedHistory((prev) => [...prev, swipedTrack]); } else if (direction === "up") { addToPlaylist(trackUri); }
   };
-
   const handleStart = () => { if (tracks.length > 0) { playTrack(tracks[tracks.length - 1].track.uri); setHasStarted(true); } };
-
-  const swipe = async (dir: string) => {
-    const topCardIndex = tracks.length - 1;
-    if (topCardIndex >= 0 && cardRefs.current[topCardIndex]) {
-      await cardRefs.current[topCardIndex].swipe(dir);
-    }
-  };
-
+  const swipe = async (dir: string) => { const topCardIndex = tracks.length - 1; if (topCardIndex >= 0 && cardRefs.current[topCardIndex]) { await cardRefs.current[topCardIndex].swipe(dir); } };
   const handlePlaylistSelect = (id: string | null) => { setSelectedPlaylistId(id); setHasStarted(false); setDeletedHistory([]); };
-
-  // --- ドラッグ座標計算 ---
-  const handleDragStart = (e: TouchEvent | MouseEvent) => {
-    const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
-    setDragStart({ x: clientX, y: clientY });
-  };
-  const handleDragMove = (e: TouchEvent | MouseEvent) => {
-    if (!dragStart) return;
-    const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
-    const diffX = clientX - dragStart.x;
-    const diffY = clientY - dragStart.y;
-    const threshold = 50;
-    if (Math.abs(diffY) > Math.abs(diffX) && diffY < -threshold) { setActiveZone("up"); }
-    else if (Math.abs(diffX) > Math.abs(diffY)) {
-      if (diffX > threshold) setActiveZone("right");
-      else if (diffX < -threshold) setActiveZone("left");
-      else setActiveZone(null);
-    } else { setActiveZone(null); }
-  };
+  const handleDragStart = (e: TouchEvent | MouseEvent) => { const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX; const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY; setDragStart({ x: clientX, y: clientY }); };
+  const handleDragMove = (e: TouchEvent | MouseEvent) => { if (!dragStart) return; const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX; const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY; const diffX = clientX - dragStart.x; const diffY = clientY - dragStart.y; const threshold = 50; if (Math.abs(diffY) > Math.abs(diffX) && diffY < -threshold) { setActiveZone("up"); } else if (Math.abs(diffX) > Math.abs(diffY)) { if (diffX > threshold) setActiveZone("right"); else if (diffX < -threshold) setActiveZone("left"); else setActiveZone(null); } else { setActiveZone(null); } };
   const handleDragEnd = () => { setDragStart(null); setTimeout(() => setActiveZone(null), 300); };
 
-  // ▼ キーボード操作 (New Feature)
+  // キーボード操作
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // STARTしていない時は無効にするならここ制御、今回は常に有効
       if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "SELECT") return;
-
       switch (e.key) {
-        case "ArrowLeft":
-          swipe("left");
-          setActiveZone("left"); // 演出用
-          break;
-        case "ArrowRight":
-          swipe("right");
-          setActiveZone("right");
-          break;
-        case "ArrowUp":
-          swipe("up");
-          setActiveZone("up");
-          break;
-        case "Backspace":
-        case "Delete":
-          undoLastAction();
-          break;
-        default:
-          break;
+        case "ArrowLeft": swipe("left"); setActiveZone("left"); break;
+        case "ArrowRight": swipe("right"); setActiveZone("right"); break;
+        case "ArrowUp": swipe("up"); setActiveZone("up"); break;
+        case "Backspace": case "Delete": undoLastAction(); break;
+        default: break;
       }
     };
-
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [tracks, deletedHistory]); // 依存配列: 最新のtracksとhistoryを参照するため必要
+  }, [tracks, deletedHistory]);
 
+  // ------------------------------------------------------------------
+  // 🚦 1. ローディング画面 (session確認中)
+  // ------------------------------------------------------------------
+  if (status === "loading") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#121212] text-emerald-500">
+        <Loader2 className="animate-spin w-12 h-12" />
+      </div>
+    );
+  }
 
-  if (!session) return (
-    <div className="flex min-h-screen items-center justify-center bg-[#121212] text-white">
-      <button onClick={() => signIn("spotify")} className="bg-[#1DB954] text-black px-8 py-4 rounded-full font-bold text-xl">Login with Spotify</button>
-    </div>
-  );
+  // ------------------------------------------------------------------
+  // 🚪 2. ログイン画面 (未ログイン時)
+  // ------------------------------------------------------------------
+  if (status === "unauthenticated" || !session) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#121212] text-white">
+        <div className="text-center space-y-8 p-8 max-w-md w-full">
+          <div className="inline-block p-6 rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/20 mb-4 animate-pulse">
+            <Music2 size={64} className="text-emerald-500" />
+          </div>
+          <h1 className="text-5xl font-black bg-gradient-to-r from-emerald-400 to-cyan-500 bg-clip-text text-transparent">Spoticlean</h1>
+          <p className="text-neutral-400 text-lg leading-relaxed">
+            Clean up your Spotify library.<br />
+            <span className="text-xs text-neutral-600 mt-2 block">※ Each user logs in with their own account.</span>
+          </p>
 
+          <button
+            onClick={() => signIn("spotify")}
+            className="w-full group relative inline-flex items-center justify-center gap-3 px-8 py-4 bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold rounded-full text-lg transition-all transform hover:scale-105 shadow-xl hover:shadow-[#1DB954]/20"
+          >
+            <PlayCircle size={24} fill="black" />
+            Login with Spotify
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ------------------------------------------------------------------
+  // 🏠 3. メインアプリ画面 (ログイン済み)
+  // ------------------------------------------------------------------
   return (
     <div className="flex flex-col h-screen w-full bg-[#121212] overflow-hidden select-none relative transition-colors duration-500">
 
@@ -191,6 +198,7 @@ export default function Home() {
         setDestinationPlaylistId={setDestinationPlaylistId}
       />
 
+      {/* Main Content (Card & Buttons) - 以下変更なし */}
       <main className="flex-1 flex flex-col md:block relative w-full h-full pt-16 md:pt-20 z-10">
 
         <div className="flex-1 flex items-center justify-center relative w-full md:absolute md:inset-0 md:z-10">
