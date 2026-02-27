@@ -117,8 +117,35 @@ export default function Home() {
   const swipe = async (dir: string) => { const topCardIndex = tracks.length - 1; if (topCardIndex >= 0 && cardRefs.current[topCardIndex]) { await cardRefs.current[topCardIndex].swipe(dir); } };
   const handlePlaylistSelect = (id: string | null) => { setSelectedPlaylistId(id); setHasStarted(false); setDeletedHistory([]); };
   const handleDragStart = (e: TouchEvent | MouseEvent) => { const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX; const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY; setDragStart({ x: clientX, y: clientY }); };
-  const handleDragMove = (e: TouchEvent | MouseEvent) => { if (!dragStart) return; const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX; const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY; const diffX = clientX - dragStart.x; const diffY = clientY - dragStart.y; const threshold = 50; if (Math.abs(diffY) > Math.abs(diffX) && diffY < -threshold) { setActiveZone("up"); } else if (Math.abs(diffX) > Math.abs(diffY)) { if (diffX > threshold) setActiveZone("right"); else if (diffX < -threshold) setActiveZone("left"); else setActiveZone(null); } else { setActiveZone(null); } };
-  const handleDragEnd = () => { setDragStart(null); setTimeout(() => setActiveZone(null), 300); };
+  const handleDragMove = (e: TouchEvent | MouseEvent) => {
+    if (!dragStart) return;
+    const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
+    const diffX = clientX - dragStart.x;
+    const diffY = clientY - dragStart.y;
+
+    // 指を少し動かすだけでゾーンに入るようにしきい値を低めに設定
+    const threshold = 35;
+
+    if (Math.abs(diffY) > Math.abs(diffX) && diffY < -threshold) {
+      setActiveZone("up");
+    } else if (Math.abs(diffX) > Math.abs(diffY)) {
+      if (diffX > threshold) setActiveZone("right");
+      else if (diffX < -threshold) setActiveZone("left");
+      else setActiveZone(null);
+    } else {
+      setActiveZone(null);
+    }
+  };
+
+  // アクティブゾーンに入った状態で指を離したら、その方向に必ずスワイプを発火させる
+  const handleDragEnd = () => {
+    if (activeZone) {
+      swipe(activeZone);
+    }
+    setDragStart(null);
+    setTimeout(() => setActiveZone(null), 300);
+  };
 
   // キーボード操作
   useEffect(() => {
@@ -216,7 +243,7 @@ export default function Home() {
                 onSwipe={(dir) => onSwipe(dir, item.track.uri, index)}
                 onCardLeftScreen={() => onCardLeftScreen(item.track.id)}
                 swipeRequirementType="position"
-                swipeThreshold={40}
+                swipeThreshold={30}
                 className="absolute top-0 left-0 w-full h-full"
               >
                 <div
