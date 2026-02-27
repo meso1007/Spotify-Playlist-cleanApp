@@ -1,6 +1,6 @@
 "use client";
 
-import { useSession, signIn } from "next-auth/react";
+import { useSession, signIn, signOut } from "next-auth/react";
 import { useEffect, useState, useRef, TouchEvent, MouseEvent } from "react";
 import TinderCard from "react-tinder-card";
 import { useSpotifyPlayer } from "@/hooks/useSpotifyPlayer";
@@ -38,6 +38,11 @@ export default function Home() {
       fetch("https://api.spotify.com/v1/me/playlists?limit=50", { headers: { Authorization: `Bearer ${session.accessToken}` } })
         .then((res) => res.json())
         .then((data) => {
+          if (data.error?.status === 401) {
+            console.log("401 error");
+            signOut();
+            return
+          }
           if (data.items) {
             setPlaylists(data.items);
             if (data.items.length > 0) setDestinationPlaylistId(data.items[0].id);
