@@ -140,9 +140,6 @@ export default function Home() {
 
   // アクティブゾーンに入った状態で指を離したら、その方向に必ずスワイプを発火させる
   const handleDragEnd = () => {
-    if (activeZone) {
-      swipe(activeZone);
-    }
     setDragStart(null);
     setTimeout(() => setActiveZone(null), 300);
   };
@@ -242,7 +239,7 @@ export default function Home() {
                 key={item.track.id}
                 onSwipe={(dir) => onSwipe(dir, item.track.uri, index)}
                 onCardLeftScreen={() => onCardLeftScreen(item.track.id)}
-                swipeRequirementType="position"
+                swipeRequirementType="velocity"
                 swipeThreshold={30}
                 className="absolute top-0 left-0 w-full h-full"
               >
