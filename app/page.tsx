@@ -11,7 +11,6 @@ import { X, Heart, ArrowUp, Undo2, PlayCircle, Music2, Loader2 } from "lucide-re
 type Playlist = { id: string; name: string; };
 
 export default function Home() {
-  // status を取得して、ロード中か未ログインかを判定する
   const { data: session, status } = useSession();
 
   const [tracks, setTracks] = useState<SavedTrack[]>([]);
@@ -22,17 +21,17 @@ export default function Home() {
   const [isDeepClean, setIsDeepClean] = useState(false);
   const [deletedHistory, setDeletedHistory] = useState<SavedTrack[]>([]);
 
-  // ドラッグ & エフェクト管理
   const [dragStart, setDragStart] = useState<{ x: number, y: number } | null>(null);
   const [activeZone, setActiveZone] = useState<"left" | "right" | "up" | null>(null);
 
-  // ログインしていない時はPlayerを初期化しない
   const { deviceId, playTrack } = useSpotifyPlayer(session?.accessToken);
   const cardRefs = useRef<any[]>([]);
+  
+  // 💡 2重スワイプ防止用のガード
+  const lastSwipedId = useRef<string | null>(null); 
+  
   const React = require('react');
 
-  // --- API Logics ---
-  // ログインしている(authenticated)時だけ実行する
   useEffect(() => {
     if (status === "authenticated" && session?.accessToken) {
       fetch("https://api.spotify.com/v1/me/playlists?limit=50", { headers: { Authorization: `Bearer ${session.accessToken}` } })
@@ -68,7 +67,6 @@ export default function Home() {
         const finalRes = await fetch(`${baseUrl}?offset=${offset}&limit=50`, { headers: { Authorization: `Bearer ${session.accessToken}` } });
         const finalData = await finalRes.json();
 
-        // エラーハンドリング（401などが返ってきた場合）
         if (finalData.error) {
           console.error("Spotify API Error:", finalData.error);
           return;
@@ -84,7 +82,6 @@ export default function Home() {
     fetchTracks();
   }, [status, session, selectedPlaylistId, isDeepClean]);
 
-  // ... (addToPlaylist, removeTrack, undoLastAction などは変更なし。ただしsessionチェックは重要) ...
   const addToPlaylist = async (trackUri: string) => {
     if (!session?.accessToken || !destinationPlaylistId) { alert("Please select a destination playlist first!"); return; }
     await fetch(`https://api.spotify.com/v1/playlists/${destinationPlaylistId}/tracks`, { method: "POST", headers: { Authorization: `Bearer ${session.accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ uris: [trackUri] }) });
@@ -106,16 +103,23 @@ export default function Home() {
   };
 
   const onCardLeftScreen = (myIdentifier: string) => { setTracks((prev) => prev.filter((t) => t.track.id !== myIdentifier)); setActiveZone(null); };
+  
   const onSwipe = (direction: string, trackUri: string, index: number) => {
+    // 💡【重要】ここで二重実行をブロック！
+    if (lastSwipedId.current === trackUri) return;
+    lastSwipedId.current = trackUri;
+
     setActiveZone(null);
     const swipedTrack = tracks[index];
     const nextIndex = index - 1;
     if (nextIndex >= 0 && tracks[nextIndex]) playTrack(tracks[nextIndex].track.uri);
     if (direction === "left") { removeTrack(trackUri); if (swipedTrack) setDeletedHistory((prev) => [...prev, swipedTrack]); } else if (direction === "up") { addToPlaylist(trackUri); }
   };
+  
   const handleStart = () => { if (tracks.length > 0) { playTrack(tracks[tracks.length - 1].track.uri); setHasStarted(true); } };
   const swipe = async (dir: string) => { const topCardIndex = tracks.length - 1; if (topCardIndex >= 0 && cardRefs.current[topCardIndex]) { await cardRefs.current[topCardIndex].swipe(dir); } };
   const handlePlaylistSelect = (id: string | null) => { setSelectedPlaylistId(id); setHasStarted(false); setDeletedHistory([]); };
+  
   const handleDragStart = (e: TouchEvent | MouseEvent) => { const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX; const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY; setDragStart({ x: clientX, y: clientY }); };
   const handleDragMove = (e: TouchEvent | MouseEvent) => {
     if (!dragStart) return;
@@ -124,7 +128,7 @@ export default function Home() {
     const diffX = clientX - dragStart.x;
     const diffY = clientY - dragStart.y;
 
-    // 指を少し動かすだけでゾーンに入るようにしきい値を低めに設定
+    // あなたが設定した最高の感度 (35px)
     const threshold = 35;
 
     if (Math.abs(diffY) > Math.abs(diffX) && diffY < -threshold) {
@@ -138,13 +142,15 @@ export default function Home() {
     }
   };
 
-  // アクティブゾーンに入った状態で指を離したら、その方向に必ずスワイプを発火させる
   const handleDragEnd = () => {
+    // 💡【復活】ゾーンに入った状態で指を離したら、強制的にスワイプさせる！
+    if (activeZone) {
+      swipe(activeZone);
+    }
     setDragStart(null);
     setTimeout(() => setActiveZone(null), 300);
   };
 
-  // キーボード操作
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "SELECT") return;
@@ -160,9 +166,6 @@ export default function Home() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [tracks, deletedHistory]);
 
-  // ------------------------------------------------------------------
-  // 🚦 1. ローディング画面 (session確認中)
-  // ------------------------------------------------------------------
   if (status === "loading") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#121212] text-emerald-500">
@@ -171,9 +174,6 @@ export default function Home() {
     );
   }
 
-  // ------------------------------------------------------------------
-  // 🚪 2. ログイン画面 (未ログイン時)
-  // ------------------------------------------------------------------
   if (status === "unauthenticated" || !session) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#121212] text-white">
@@ -186,7 +186,6 @@ export default function Home() {
             Clean up your Spotify library.<br />
             <span className="text-xs text-neutral-600 mt-2 block">※ Each user logs in with their own account.</span>
           </p>
-
           <button
             onClick={() => signIn("spotify")}
             className="w-full group relative inline-flex items-center justify-center gap-3 px-8 py-4 bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold rounded-full text-lg transition-all transform hover:scale-105 shadow-xl hover:shadow-[#1DB954]/20"
@@ -199,9 +198,6 @@ export default function Home() {
     );
   }
 
-  // ------------------------------------------------------------------
-  // 🏠 3. メインアプリ画面 (ログイン済み)
-  // ------------------------------------------------------------------
   return (
     <div className="flex flex-col h-screen w-full bg-[#121212] overflow-hidden select-none relative transition-colors duration-500">
 
@@ -227,9 +223,7 @@ export default function Home() {
         setDestinationPlaylistId={setDestinationPlaylistId}
       />
 
-      {/* Main Content (Card & Buttons) - 以下変更なし */}
       <main className="flex-1 flex flex-col md:block relative w-full h-full pt-16 md:pt-20 z-10">
-
         <div className="flex-1 flex items-center justify-center relative w-full md:absolute md:inset-0 md:z-10">
           <div className="relative w-[90%] max-w-[340px] aspect-[3/4] md:w-[400px] md:h-[540px]">
             {tracks.map((item, index) => (
@@ -239,8 +233,12 @@ export default function Home() {
                 key={item.track.id}
                 onSwipe={(dir) => onSwipe(dir, item.track.uri, index)}
                 onCardLeftScreen={() => onCardLeftScreen(item.track.id)}
-                swipeRequirementType="velocity"
-                swipeThreshold={30}
+                
+                // 💡【重要】ライブラリの標準判定を完全に殺す（自作ロジックに100%任せるため）
+                swipeRequirementType="position"
+                swipeThreshold={9999} 
+                preventSwipe={['down']}
+                
                 className="absolute top-0 left-0 w-full h-full"
               >
                 <div
@@ -260,18 +258,15 @@ export default function Home() {
                   <img src={item.track.album.images[0]?.url} className="w-full h-full object-cover pointer-events-none" alt="Art" />
                   <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-90" />
 
-                  {/* Up Hint */}
                   <div className={`absolute top-4 w-full flex justify-center transition-opacity duration-300 ${activeZone === 'up' && index === tracks.length - 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
                     <span className="bg-sky-600/90 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest shadow-lg">Up to Add</span>
                   </div>
 
-                  {/* Text */}
-                  <div className="absolute bottom-0 w-full p-6 text-left">
+                  <div className="absolute bottom-0 w-full p-6 text-left pointer-events-none">
                     <h2 className="text-2xl font-black text-white leading-tight drop-shadow-md line-clamp-2">{item.track.name}</h2>
                     <p className="text-lg text-neutral-300 font-medium drop-shadow-md line-clamp-1">{item.track.artists[0].name}</p>
                   </div>
 
-                  {/* Icons Overlay */}
                   {index === tracks.length - 1 && activeZone && (
                     <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
                       {activeZone === 'left' && <X size={80} className="text-rose-500 opacity-80 drop-shadow-lg" />}
